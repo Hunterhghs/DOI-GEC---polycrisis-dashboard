@@ -1,20 +1,32 @@
 /**
- * 21st Century Observatory — Visualization & Chart Engine
- * Built on Chart.js 4 + Custom Interactive SVG Cascade Network
+ * 21st Century Observatory — Visualization, World Map & Chart Engine
+ * Built on Chart.js 4 + D3.js v7 / TopoJSON Natural Earth Map + Custom SVG Networks
  */
 
 window.DashboardCharts = (function () {
   const charts = {};
-  let currentYearIndex = 25; // Default 2025 (index 25 of 2000..2025)
+  let currentYearIndex = 25; // Default 2025
+
+  // World Map State
+  let worldGeoData = null;
+  let activeMapLayer = "netBalance";
+  let activeMapOverlay = "both"; // "choropleth", "both", "hotspots"
+  let selectedMapCountryCode = "IND";
+  let d3Svg = null;
+  let d3MapGroup = null;
+  let d3Zoom = null;
+  let d3Projection = null;
 
   function getThemeColors() {
     const isLight = document.documentElement.getAttribute("data-theme") === "light";
     return {
+      isLight,
       text: isLight ? "#334155" : "#94a3b8",
       textStrong: isLight ? "#0f172a" : "#f1f5f9",
       grid: isLight ? "rgba(15, 23, 42, 0.07)" : "rgba(148, 163, 184, 0.1)",
       tooltipBg: isLight ? "rgba(255, 255, 255, 0.96)" : "rgba(13, 20, 33, 0.95)",
       tooltipBorder: isLight ? "rgba(15, 23, 42, 0.15)" : "rgba(148, 163, 184, 0.25)",
+      unmappedFill: isLight ? "#cbd5e1" : "#1e293b",
       emerald: isLight ? "#059669" : "#10b981",
       cyan: isLight ? "#0284c7" : "#38bdf8",
       indigo: "#818cf8",
@@ -48,7 +60,6 @@ window.DashboardCharts = (function () {
       ctx.setLineDash([4, 4]);
       ctx.stroke();
 
-      // Year badge at top
       const yearLabel = String(window.DASHBOARD_DATA.meta.years[idx]);
       ctx.fillStyle = "rgba(56, 189, 248, 0.9)";
       ctx.font = "600 10px 'JetBrains Mono', monospace";
@@ -63,10 +74,7 @@ window.DashboardCharts = (function () {
     return {
       responsive: true,
       maintainAspectRatio: false,
-      interaction: {
-        mode: "index",
-        intersect: false
-      },
+      interaction: { mode: "index", intersect: false },
       plugins: {
         verticalYearLine: { enabled: enableYearLine },
         legend: {
@@ -102,7 +110,532 @@ window.DashboardCharts = (function () {
   }
 
   // ==========================================================================
-  // 1. TWIN FORCE INDEX CHART (2000-2025)
+  // NEW MODULE A: INTERACTIVE D3 + TOPOJSON WORLD MAP
+  // ==========================================================================
+  const MAP_LAYER_CONFIG = {
+    netBalance: {
+      title: "Net Resilience Balance (Convergence Score minus Polycrisis Exposure)",
+      unit: " pts",
+      minLabel: "-75 (Acute Polycrisis Trap)",
+      maxLabel: "+74 (High Net Resilience)",
+      gradientCss: "linear-gradient(90deg, #be123c 0%, #f43f5e 25%, #f59e0b 48%, #38bdf8 72%, #10b981 100%)",
+      getValue: (c) => c.convergenceScore - c.polycrisisExposure,
+      format: (v) => (v >= 0 ? `+${v} pts` : `${v} pts`),
+      getColor: (v) => {
+        if (v <= -40) return "#be123c";
+        if (v <= -15) return "#f43f5e";
+        if (v < 0) return "#f97316";
+        if (v < 15) return "#eab308";
+        if (v < 35) return "#38bdf8";
+        return "#10b981";
+      }
+    },
+    convergenceScore: {
+      title: "Convergence, DOI & Green Transition Score (0–100)",
+      unit: "/100",
+      minLabel: "20 (Stagnant / Fragile)",
+      maxLabel: "95 (Fast Converger / Tech Leader)",
+      gradientCss: "linear-gradient(90deg, #334155 0%, #6366f1 30%, #38bdf8 65%, #10b981 100%)",
+      getValue: (c) => c.convergenceScore,
+      format: (v) => `${v}/100`,
+      getColor: (v) => {
+        if (v < 40) return "#475569";
+        if (v < 58) return "#6366f1";
+        if (v < 72) return "#0284c7";
+        if (v < 82) return "#38bdf8";
+        return "#10b981";
+      }
+    },
+    polycrisisExposure: {
+      title: "Polycrisis Human Exposure Index (0–100)",
+      unit: "/100",
+      minLabel: "15 (Low Direct Exposure)",
+      maxLabel: "97 (Extreme Multi-Hazard Exposure)",
+      gradientCss: "linear-gradient(90deg, #10b981 0%, #eab308 40%, #f97316 70%, #e11d48 100%)",
+      getValue: (c) => c.polycrisisExposure,
+      format: (v) => `${v}/100`,
+      getColor: (v) => {
+        if (v < 35) return "#10b981";
+        if (v < 52) return "#38bdf8";
+        if (v < 68) return "#eab308";
+        if (v < 82) return "#f97316";
+        return "#e11d48";
+      }
+    },
+    gdpMultiple: {
+      title: "Economic Catch-Up Velocity: GDP/cap PPP Multiple (2025 vs 2000)",
+      unit: "x",
+      minLabel: "0.5x (Contraction)",
+      maxLabel: "7.5x (Hyper-Convergence)",
+      gradientCss: "linear-gradient(90deg, #f43f5e 0%, #818cf8 35%, #38bdf8 68%, #10b981 100%)",
+      getValue: (c) => +(c.gdpPpp2025 / c.gdpPpp2000).toFixed(2),
+      format: (v) => `${v}x`,
+      getColor: (v) => {
+        if (v < 1.2) return "#f43f5e";
+        if (v < 1.8) return "#818cf8";
+        if (v < 2.6) return "#38bdf8";
+        if (v < 4.0) return "#34d399";
+        return "#059669";
+      }
+    },
+    cleanElecShare2025: {
+      title: "Clean Electricity Share in 2025 (Renewables + Nuclear %)",
+      unit: "%",
+      minLabel: "4% (Fossil Locked)",
+      maxLabel: "99% (Decarbonized Grid)",
+      gradientCss: "linear-gradient(90deg, #475569 0%, #f59e0b 30%, #38bdf8 65%, #10b981 100%)",
+      getValue: (c) => c.cleanElecShare2025,
+      format: (v) => `${v}%`,
+      getColor: (v) => {
+        if (v < 20) return "#64748b";
+        if (v < 35) return "#eab308";
+        if (v < 55) return "#38bdf8";
+        if (v < 80) return "#34d399";
+        return "#10b981";
+      }
+    },
+    digitalAdoption2025: {
+      title: "Digital & Leapfrog Adoption Index (Internet + DPI/Mobile Money %)",
+      unit: "%",
+      minLabel: "28% (Digital Divide)",
+      maxLabel: "99% (Universal DPI)",
+      gradientCss: "linear-gradient(90deg, #475569 0%, #a78bfa 40%, #38bdf8 75%, #10b981 100%)",
+      getValue: (c) => c.digitalAdoption2025,
+      format: (v) => `${v}%`,
+      getColor: (v) => {
+        if (v < 45) return "#64748b";
+        if (v < 68) return "#a78bfa";
+        if (v < 82) return "#38bdf8";
+        if (v < 92) return "#2dd4bf";
+        return "#10b981";
+      }
+    },
+    heatDays2025: {
+      title: "Lethal / Extreme Heat Stress Exposure (Days/Year >35°C HI)",
+      unit: " days/yr",
+      minLabel: "2 days/yr (Temperate)",
+      maxLabel: "138 days/yr (Uninhabitable Niche Risk)",
+      gradientCss: "linear-gradient(90deg, #38bdf8 0%, #10b981 25%, #eab308 55%, #f97316 78%, #e11d48 100%)",
+      getValue: (c) => c.heatDays2025,
+      format: (v) => `${v} days/yr`,
+      getColor: (v) => {
+        if (v < 20) return "#38bdf8";
+        if (v < 45) return "#10b981";
+        if (v < 75) return "#eab308";
+        if (v < 105) return "#f97316";
+        return "#e11d48";
+      }
+    }
+  };
+
+  function initWorldMap() {
+    const svgEl = document.getElementById("worldMapSvg");
+    if (!svgEl || typeof d3 === "undefined") return;
+
+    const width = 920;
+    const height = 490;
+
+    d3Svg = d3.select(svgEl).attr("viewBox", `0 0 ${width} ${height}`);
+    d3Svg.selectAll("*").remove();
+
+    // Subtle graticule background
+    d3Projection = d3.geoNaturalEarth1().scale(168).translate([width / 2, height / 1.88]);
+    const pathGen = d3.geoPath().projection(d3Projection);
+    const graticule = d3.geoGraticule();
+
+    d3MapGroup = d3Svg.append("g").attr("class", "map-master-group");
+
+    d3MapGroup
+      .append("path")
+      .datum(graticule())
+      .attr("class", "map-graticule")
+      .attr("d", pathGen)
+      .attr("fill", "none")
+      .attr("stroke", "rgba(148, 163, 184, 0.08)")
+      .attr("stroke-width", 0.5);
+
+    d3MapGroup.append("g").attr("class", "map-polygons-layer");
+    d3MapGroup.append("g").attr("class", "map-bubbles-layer");
+
+    // Setup Zoom & Pan
+    d3Zoom = d3
+      .zoom()
+      .scaleExtent([1, 7])
+      .on("zoom", (event) => {
+        d3MapGroup.attr("transform", event.transform);
+      });
+
+    d3Svg.call(d3Zoom);
+
+    // Load Natural Earth 110m TopoJSON (cached in memory after first load)
+    if (worldGeoData) {
+      drawWorldMapGeometry(pathGen);
+    } else {
+      fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
+        .then((res) => res.json())
+        .then((topo) => {
+          worldGeoData = topojson.feature(topo, topo.objects.countries).features;
+          drawWorldMapGeometry(pathGen);
+        })
+        .catch(() => {
+          // Offline fallback: render proportional country coordinate circles directly
+          drawWorldMapGeometry(pathGen);
+        });
+    }
+  }
+
+  function drawWorldMapGeometry(pathGen) {
+    if (!d3MapGroup) return;
+    const countries = window.DASHBOARD_DATA.countries;
+    const isoMap = {};
+    countries.forEach((c) => {
+      isoMap[c.isoNum] = c;
+      isoMap[String(Number(c.isoNum))] = c;
+    });
+
+    const polyLayer = d3MapGroup.select(".map-polygons-layer");
+    if (worldGeoData) {
+      polyLayer
+        .selectAll("path")
+        .data(worldGeoData)
+        .join("path")
+        .attr("class", (d) => {
+          const c = isoMap[String(d.id)];
+          return c ? `map-country-path has-data code-${c.code}` : "map-country-path";
+        })
+        .attr("d", pathGen)
+        .on("mouseenter", (event, d) => {
+          const c = isoMap[String(d.id)];
+          if (c) showMapTooltip(event, c);
+        })
+        .on("mousemove", (event, d) => {
+          const c = isoMap[String(d.id)];
+          if (c) moveMapTooltip(event);
+        })
+        .on("mouseleave", hideMapTooltip)
+        .on("click", (event, d) => {
+          const c = isoMap[String(d.id)];
+          if (c) selectMapCountry(c.code);
+        });
+    }
+
+    updateWorldMapLayer(activeMapLayer);
+  }
+
+  function updateWorldMapLayer(layerKey) {
+    if (MAP_LAYER_CONFIG[layerKey]) {
+      activeMapLayer = layerKey;
+    }
+    const cfg = MAP_LAYER_CONFIG[activeMapLayer];
+    const cTheme = getThemeColors();
+    const countries = window.DASHBOARD_DATA.countries;
+    const isoMap = {};
+    countries.forEach((c) => {
+      isoMap[c.isoNum] = c;
+      isoMap[String(Number(c.isoNum))] = c;
+    });
+
+    // Update Legend UI
+    const titleEl = document.getElementById("mapActiveLayerTitle");
+    const minEl = document.getElementById("mapLegendMin");
+    const maxEl = document.getElementById("mapLegendMax");
+    const gradEl = document.getElementById("mapLegendGradient");
+    if (titleEl) titleEl.textContent = cfg.title;
+    if (minEl) minEl.textContent = cfg.minLabel;
+    if (maxEl) maxEl.textContent = cfg.maxLabel;
+    if (gradEl) gradEl.style.background = cfg.gradientCss;
+
+    if (!d3MapGroup) return;
+
+    // 1. Color Choropleth Polygons
+    d3MapGroup
+      .select(".map-polygons-layer")
+      .selectAll("path")
+      .attr("fill", (d) => {
+        const c = isoMap[String(d.id)];
+        if (!c) return cTheme.unmappedFill;
+        if (activeMapOverlay === "hotspots") {
+          return c.polycrisisExposure >= 75 ? "rgba(244, 63, 94, 0.38)" : cTheme.unmappedFill;
+        }
+        return cfg.getColor(cfg.getValue(c));
+      });
+
+    // 2. Render Proportional Bubbles / Hotspots at Country Coordinates
+    const bubbleLayer = d3MapGroup.select(".map-bubbles-layer");
+    if (activeMapOverlay === "choropleth") {
+      bubbleLayer.selectAll("*").remove();
+    } else {
+      bubbleLayer
+        .selectAll("circle")
+        .data(countries, (d) => d.code)
+        .join("circle")
+        .attr("class", "map-bubble-circle")
+        .attr("cx", (d) => d3Projection([d.lon, d.lat])[0])
+        .attr("cy", (d) => d3Projection([d.lon, d.lat])[1])
+        .attr("r", (d) => {
+          if (activeMapOverlay === "hotspots") {
+            return d.polycrisisExposure >= 70 ? Math.max(5, Math.min(20, (d.polycrisisExposure - 55) * 0.42)) : 3;
+          }
+          return Math.max(4, Math.min(22, Math.sqrt(d.popM) * 0.72));
+        })
+        .attr("fill", (d) => {
+          if (activeMapOverlay === "hotspots") {
+            return d.polycrisisExposure >= 75 ? "#f43f5e" : "#38bdf8";
+          }
+          return cfg.getColor(cfg.getValue(d));
+        })
+        .attr("fill-opacity", activeMapOverlay === "hotspots" ? 0.82 : 0.78)
+        .attr("stroke", "#0f172a")
+        .attr("stroke-width", 1.2)
+        .on("mouseenter", (event, d) => showMapTooltip(event, d))
+        .on("mousemove", (event) => moveMapTooltip(event))
+        .on("mouseleave", hideMapTooltip)
+        .on("click", (event, d) => selectMapCountry(d.code));
+    }
+
+    // 3. Update Top 5 & Bottom 5 Ranking Lists for Active Layer
+    renderMapLeaderboards(cfg);
+
+    // 4. Refresh Selected Country Dossier
+    selectMapCountry(selectedMapCountryCode);
+  }
+
+  function updateWorldMapOverlay(overlayMode) {
+    activeMapOverlay = overlayMode;
+    updateWorldMapLayer(activeMapLayer);
+  }
+
+  function zoomWorldMap(factor) {
+    if (!d3Svg || !d3Zoom) return;
+    if (factor === "reset") {
+      d3Svg.transition().duration(450).call(d3Zoom.transform, d3.zoomIdentity);
+    } else {
+      d3Svg.transition().duration(300).call(d3Zoom.scaleBy, factor);
+    }
+  }
+
+  function showMapTooltip(event, c) {
+    const tip = document.getElementById("mapFloatingTooltip");
+    if (!tip) return;
+    const cfg = MAP_LAYER_CONFIG[activeMapLayer];
+    const val = cfg.getValue(c);
+    const net = c.convergenceScore - c.polycrisisExposure;
+
+    tip.innerHTML = `
+      <div style="font-weight:700; font-size:0.84rem; margin-bottom:2px;">
+        ${c.flag} ${c.name} <span style="color:var(--text-muted); font-family:var(--font-mono);">(${c.code})</span>
+      </div>
+      <div style="font-size:0.7rem; color:var(--conv-cyan); margin-bottom:5px;">${c.archetype}</div>
+      <div style="font-family:var(--font-mono); font-size:0.74rem; display:flex; justify-content:space-between; gap:8px;">
+        <span>Active Layer:</span>
+        <strong style="color:#fff;">${cfg.format(val)}</strong>
+      </div>
+      <div style="font-family:var(--font-mono); font-size:0.72rem; display:flex; justify-content:space-between; gap:8px;">
+        <span>Convergence / Polycrisis:</span>
+        <span><b style="color:var(--conv-emerald);">${c.convergenceScore}</b> vs <b style="color:var(--poly-crimson);">${c.polycrisisExposure}</b> (${net >= 0 ? "+" : ""}${net})</span>
+      </div>
+    `;
+    tip.classList.add("visible");
+    moveMapTooltip(event);
+  }
+
+  function moveMapTooltip(event) {
+    const tip = document.getElementById("mapFloatingTooltip");
+    const wrap = document.getElementById("mapViewportWrap");
+    if (!tip || !wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const x = Math.min(rect.width - 250, Math.max(10, event.clientX - rect.left + 14));
+    const y = Math.min(rect.height - 110, Math.max(10, event.clientY - rect.top - 20));
+    tip.style.left = `${x}px`;
+    tip.style.top = `${y}px`;
+  }
+
+  function hideMapTooltip() {
+    const tip = document.getElementById("mapFloatingTooltip");
+    if (tip) tip.classList.remove("visible");
+  }
+
+  function selectMapCountry(code) {
+    selectedMapCountryCode = code;
+    const c = window.DASHBOARD_DATA.countries.find((x) => x.code === code) || window.DASHBOARD_DATA.countries[0];
+    if (!c) return;
+
+    if (d3MapGroup) {
+      d3MapGroup.selectAll(".map-country-path").classed("selected-country", false);
+      d3MapGroup.selectAll(`.code-${c.code}`).classed("selected-country", true);
+    }
+
+    const net = c.convergenceScore - c.polycrisisExposure;
+    const gdpMult = (c.gdpPpp2025 / c.gdpPpp2000).toFixed(1);
+
+    const setTxt = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = v;
+    };
+
+    setTxt("mapDossierName", `${c.flag} ${c.name} (${c.code})`);
+    setTxt("mapDossierMeta", `${c.region} • Pop: ${c.popM}M • ${c.archetype}`);
+    setTxt("mapDossierConv", `${c.convergenceScore}/100`);
+    setTxt("mapDossierPoly", `${c.polycrisisExposure}/100`);
+    setTxt("mapDossierNet", `${net >= 0 ? "+" : ""}${net} pts`);
+    setTxt("mapDossierGdp", `$${c.gdpPpp2025.toLocaleString()} (${gdpMult}x)`);
+    setTxt("mapDossierClean", `${c.cleanElecShare2025}%`);
+    setTxt("mapDossierHeat", `${c.heatDays2025} days/yr`);
+    setTxt("mapDossierSummary", c.summary);
+
+    const inspectBtn = document.getElementById("mapDossierModalBtn");
+    if (inspectBtn) {
+      inspectBtn.onclick = () => {
+        if (window.DashboardApp && window.DashboardApp.openCountryModal) {
+          window.DashboardApp.openCountryModal(c.code);
+        }
+      };
+    }
+  }
+
+  function renderMapLeaderboards(cfg) {
+    const topEl = document.getElementById("mapTop5List");
+    const botEl = document.getElementById("mapBottom5List");
+    if (!topEl || !botEl) return;
+
+    const sorted = [...window.DASHBOARD_DATA.countries].sort((a, b) => cfg.getValue(b) - cfg.getValue(a));
+    const top5 = sorted.slice(0, 5);
+    const bot5 = sorted.slice(-5).reverse();
+
+    const makeHtml = (arr, color) =>
+      arr
+        .map(
+          (c) => `
+        <div class="map-rank-item" data-map-code="${c.code}">
+          <span>${c.flag} <strong>${c.name}</strong></span>
+          <span style="font-family:var(--font-mono); font-weight:700; color:${color};">${cfg.format(cfg.getValue(c))}</span>
+        </div>
+      `
+        )
+        .join("");
+
+    topEl.innerHTML = makeHtml(top5, "var(--conv-emerald)");
+    botEl.innerHTML = makeHtml(bot5, "var(--poly-crimson)");
+
+    document.querySelectorAll("[data-map-code]").forEach((el) => {
+      el.addEventListener("click", () => selectMapCountry(el.getAttribute("data-map-code")));
+    });
+  }
+
+  // ==========================================================================
+  // NEW MODULE B: 3-NATION HEAD-TO-HEAD COMPARATOR CHARTS (NATIONS TAB)
+  // ==========================================================================
+  function updateNationComparatorCharts(codes) {
+    const countries = codes
+      .map((code) => window.DASHBOARD_DATA.countries.find((c) => c.code === code))
+      .filter(Boolean);
+    if (countries.length === 0) return;
+
+    const c = getThemeColors();
+    const palette = [
+      { border: c.emerald, bg: "rgba(16, 185, 129, 0.18)" },
+      { border: c.cyan, bg: "rgba(56, 189, 248, 0.18)" },
+      { border: c.crimson, bg: "rgba(244, 63, 94, 0.18)" }
+    ];
+
+    // 1. Multi-Nation 7-Axis Radar Comparison Chart
+    const radarCtx = document.getElementById("nationCompareRadarChart");
+    if (radarCtx) {
+      if (charts.nationCompareRadar) charts.nationCompareRadar.destroy();
+
+      charts.nationCompareRadar = new Chart(radarCtx, {
+        type: "radar",
+        data: {
+          labels: [
+            "Convergence & DOI Score",
+            "Digital Adoption (%)",
+            "Clean Electricity (%)",
+            "Income Catch-Up (0-100)",
+            "Extreme Heat Stress",
+            "Water Stress",
+            "Debt & Conflict Risk"
+          ],
+          datasets: countries.map((ct, i) => {
+            const incomeGrowthNorm = Math.min(100, Math.round((ct.gdpPpp2025 / Math.max(800, ct.gdpPpp2000)) * 20));
+            return {
+              label: `${ct.flag} ${ct.name}`,
+              data: [
+                ct.convergenceScore,
+                ct.digitalAdoption2025,
+                ct.cleanElecShare2025,
+                incomeGrowthNorm,
+                Math.min(100, Math.round(ct.heatDays2025 * 0.75)),
+                ct.waterStress,
+                Math.round((ct.debtVulnerability + ct.conflictRisk) / 2)
+              ],
+              borderColor: palette[i % 3].border,
+              backgroundColor: palette[i % 3].bg,
+              borderWidth: 2.5,
+              pointRadius: 3.5
+            };
+          })
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            r: {
+              angleLines: { color: c.grid },
+              grid: { color: c.grid },
+              pointLabels: { color: c.textStrong, font: { size: 10, weight: "600" } },
+              ticks: { display: false },
+              suggestedMin: 0,
+              suggestedMax: 100
+            }
+          },
+          plugins: {
+            legend: { labels: { color: c.textStrong, font: { size: 11, weight: "600" } } }
+          }
+        }
+      });
+    }
+
+    // 2. Multi-Nation Grouped Indicator Bar Chart
+    const barCtx = document.getElementById("nationCompareBarChart");
+    if (barCtx) {
+      if (charts.nationCompareBar) charts.nationCompareBar.destroy();
+
+      const opts = baseChartOptions(c, false);
+      opts.scales.y.max = 100;
+      opts.scales.y.title = { display: true, text: "Score / Share (0–100)", color: c.text, font: { size: 11 } };
+
+      charts.nationCompareBar = new Chart(barCtx, {
+        type: "bar",
+        data: {
+          labels: [
+            "Convergence & DOI",
+            "Polycrisis Exposure",
+            "Clean Power (%)",
+            "Digital Adoption (%)",
+            "Water Stress",
+            "Debt Vulnerability"
+          ],
+          datasets: countries.map((ct, i) => ({
+            label: `${ct.flag} ${ct.name} ($${ct.gdpPpp2025.toLocaleString()} PPP)`,
+            data: [
+              ct.convergenceScore,
+              ct.polycrisisExposure,
+              ct.cleanElecShare2025,
+              ct.digitalAdoption2025,
+              ct.waterStress,
+              ct.debtVulnerability
+            ],
+            backgroundColor: palette[i % 3].border,
+            borderRadius: 4
+          }))
+        },
+        options: opts
+      });
+    }
+  }
+
+  // ==========================================================================
+  // EXISTING CHARTS (1–10)
   // ==========================================================================
   function initTwinForceChart() {
     const ctx = document.getElementById("twinForceChart");
@@ -151,7 +684,6 @@ window.DashboardCharts = (function () {
     });
   }
 
-  // Switch Twin Force Chart mode ("index" vs "velocity")
   function updateTwinForceMode(mode) {
     const chart = charts.twinForce;
     if (!chart) return;
@@ -159,7 +691,6 @@ window.DashboardCharts = (function () {
     const c = getThemeColors();
 
     if (mode === "velocity") {
-      // Annual net differential (Convergence Index minus Polycrisis Index)
       const diff = D.timeSeries.convergenceTransitionIndex.map(
         (v, i) => +(v - D.timeSeries.polycrisisExposureIndex[i]).toFixed(1)
       );
@@ -204,9 +735,6 @@ window.DashboardCharts = (function () {
     chart.update();
   }
 
-  // ==========================================================================
-  // 2. REGIONAL EXPOSURE VS CONVERGENCE OVERVIEW BAR CHART
-  // ==========================================================================
   function initRegionalBalanceChart() {
     const ctx = document.getElementById("regionalBalanceChart");
     if (!ctx) return;
@@ -216,12 +744,7 @@ window.DashboardCharts = (function () {
     const opts = baseChartOptions(c, false);
     opts.indexAxis = "y";
     opts.scales.x.max = 100;
-    opts.scales.x.title = {
-      display: true,
-      text: "Normalized Score (0–100)",
-      color: c.text,
-      font: { size: 11 }
-    };
+    opts.scales.x.title = { display: true, text: "Normalized Score (0–100)", color: c.text, font: { size: 11 } };
 
     charts.regionalBalance = new Chart(ctx, {
       type: "bar",
@@ -237,7 +760,6 @@ window.DashboardCharts = (function () {
           {
             label: "Polycrisis Human Exposure Intensity",
             data: regs.map((r) => {
-              // Normalize regional multi-hazard exposure (0-100)
               const heatShare = (r.lethalHeatPopM / (r.popBillions * 1000)) * 100;
               const waterShare = (r.waterStressPopM / (r.popBillions * 1000)) * 100;
               const dispFactor = Math.min(100, (r.displacedPopM / r.popBillions) * 2.2);
@@ -252,9 +774,6 @@ window.DashboardCharts = (function () {
     });
   }
 
-  // ==========================================================================
-  // 3. GLOBAL ECONOMIC CONVERGENCE CHART (GDP PPP SHARE & POVERTY/INEQUALITY)
-  // ==========================================================================
   function initConvergenceChart() {
     const ctx = document.getElementById("convergenceChart");
     if (!ctx) return;
@@ -384,9 +903,6 @@ window.DashboardCharts = (function () {
     chart.update();
   }
 
-  // ==========================================================================
-  // 4. GLOBAL INCOME DISTRIBUTION SHIFT (2000 vs 2012 vs 2025)
-  // ==========================================================================
   function initIncomeDistChart() {
     const ctx = document.getElementById("incomeDistChart");
     if (!ctx) return;
@@ -394,18 +910,8 @@ window.DashboardCharts = (function () {
     const dist = window.DASHBOARD_DATA.incomeDistribution;
 
     const opts = baseChartOptions(c, false);
-    opts.scales.y.title = {
-      display: true,
-      text: "% of World Population in Income Bracket",
-      color: c.text,
-      font: { size: 11 }
-    };
-    opts.scales.x.title = {
-      display: true,
-      text: "Daily Income / Consumption per Capita (2017 PPP USD, Log Scale)",
-      color: c.text,
-      font: { size: 11 }
-    };
+    opts.scales.y.title = { display: true, text: "% of World Population in Income Bracket", color: c.text, font: { size: 11 } };
+    opts.scales.x.title = { display: true, text: "Daily Income / Consumption per Capita (2017 PPP USD, Log Scale)", color: c.text, font: { size: 11 } };
 
     charts.incomeDist = new Chart(ctx, {
       type: "line",
@@ -446,9 +952,6 @@ window.DashboardCharts = (function () {
     });
   }
 
-  // ==========================================================================
-  // 5. DIFFUSION OF INNOVATIONS (ROGERS S-CURVES)
-  // ==========================================================================
   function initDoiSCurveChart() {
     const ctx = document.getElementById("doiSCurveChart");
     if (!ctx) return;
@@ -456,12 +959,7 @@ window.DashboardCharts = (function () {
     const sc = window.DASHBOARD_DATA.innovationDiffusion.sCurves;
 
     const opts = baseChartOptions(c, false);
-    opts.scales.y.title = {
-      display: true,
-      text: "Adoption / Penetration Rate (%)",
-      color: c.text,
-      font: { size: 11 }
-    };
+    opts.scales.y.title = { display: true, text: "Adoption / Penetration Rate (%)", color: c.text, font: { size: 11 } };
     opts.scales.y.max = 115;
 
     charts.doiSCurve = new Chart(ctx, {
@@ -482,9 +980,6 @@ window.DashboardCharts = (function () {
     });
   }
 
-  // ==========================================================================
-  // 6. WRIGHT'S LAW & GREEN TRANSITION CHART
-  // ==========================================================================
   function initWrightsLawChart() {
     const ctx = document.getElementById("wrightsLawChart");
     if (!ctx) return;
@@ -596,9 +1091,6 @@ window.DashboardCharts = (function () {
     chart.update();
   }
 
-  // ==========================================================================
-  // 7. POLYCRISIS MULTI-HAZARD HUMAN EXPOSURE CHART (2000-2025)
-  // ==========================================================================
   function initPolycrisisTrendChart() {
     const ctx = document.getElementById("polycrisisTrendChart");
     if (!ctx) return;
@@ -659,9 +1151,6 @@ window.DashboardCharts = (function () {
     });
   }
 
-  // ==========================================================================
-  // 8. PLANETARY BOUNDARIES RADAR CHART (2000 vs 2025 vs Safe Threshold)
-  // ==========================================================================
   function initPlanetaryRadarChart() {
     const ctx = document.getElementById("planetaryRadarChart");
     if (!ctx) return;
@@ -705,33 +1194,17 @@ window.DashboardCharts = (function () {
           r: {
             angleLines: { color: c.grid },
             grid: { color: c.grid },
-            pointLabels: {
-              color: c.textStrong,
-              font: { family: "'Inter', sans-serif", size: 10, weight: "600" }
-            },
-            ticks: {
-              display: false,
-              maxTicksLimit: 5
-            },
+            pointLabels: { color: c.textStrong, font: { family: "'Inter', sans-serif", size: 10, weight: "600" } },
+            ticks: { display: false, maxTicksLimit: 5 },
             suggestedMin: 0,
             suggestedMax: 250
           }
         },
-        plugins: {
-          legend: {
-            labels: {
-              color: c.text,
-              font: { size: 11 }
-            }
-          }
-        }
+        plugins: { legend: { labels: { color: c.text, font: { size: 11 } } } }
       }
     });
   }
 
-  // ==========================================================================
-  // 9. INTERACTIVE POLYCRISIS SYSTEMIC CASCADE SVG NETWORK
-  // ==========================================================================
   function renderCascadeNetwork() {
     const svg = document.getElementById("cascadeSvg");
     if (!svg) return;
@@ -752,8 +1225,7 @@ window.DashboardCharts = (function () {
       </defs>
     `;
 
-    // Draw Links
-    links.forEach((link, idx) => {
+    links.forEach((link) => {
       const s = nodeMap[link.source];
       const t = nodeMap[link.target];
       if (!s || !t) return;
@@ -762,8 +1234,6 @@ window.DashboardCharts = (function () {
       const stroke = isAmplify ? "#f43f5e" : "#10b981";
       const marker = isAmplify ? "url(#arrow-amplify)" : "url(#arrow-mitigate)";
       const dash = isAmplify ? "" : 'stroke-dasharray="5,4"';
-
-      // Slight curve offset
       const mx = (s.x + t.x) / 2;
       const my = (s.y + t.y) / 2 - 18;
 
@@ -784,7 +1254,6 @@ window.DashboardCharts = (function () {
       `;
     });
 
-    // Draw Nodes
     nodes.forEach((n) => {
       const isCrisis = n.type === "crisis";
       const fill = isCrisis ? "rgba(244, 63, 94, 0.16)" : "rgba(16, 185, 129, 0.16)";
@@ -809,7 +1278,6 @@ window.DashboardCharts = (function () {
 
     svg.innerHTML = html;
 
-    // Interactive hover highlighting on cascade nodes
     const nodeEls = svg.querySelectorAll(".cascade-node");
     const linkEls = svg.querySelectorAll(".cascade-link-group");
     const statusEl = document.getElementById("cascadeHoverStatus");
@@ -835,9 +1303,6 @@ window.DashboardCharts = (function () {
     });
   }
 
-  // ==========================================================================
-  // 10. COUNTRY 4-QUADRANT BUBBLE MATRIX (42 COUNTRIES)
-  // ==========================================================================
   function initCountryMatrixChart(filteredRegion = "ALL") {
     const ctx = document.getElementById("countryMatrixChart");
     if (!ctx) return;
@@ -866,7 +1331,6 @@ window.DashboardCharts = (function () {
       charts.countryMatrix.destroy();
     }
 
-    // Plugin to draw quadrant dividing lines & labels
     const quadrantPlugin = {
       id: "quadrantOverlay",
       beforeDraw(chart) {
@@ -879,19 +1343,16 @@ window.DashboardCharts = (function () {
         ctx.lineWidth = 1.2;
         ctx.setLineDash([6, 6]);
 
-        // Vertical line at Convergence = 65
         ctx.beginPath();
         ctx.moveTo(midX, y.top);
         ctx.lineTo(midX, y.bottom);
         ctx.stroke();
 
-        // Horizontal line at Polycrisis Exposure = 60
         ctx.beginPath();
         ctx.moveTo(x.left, midY);
         ctx.lineTo(x.right, midY);
         ctx.stroke();
 
-        // Quadrant Labels
         ctx.font = "600 10px 'JetBrains Mono', monospace";
         ctx.fillStyle = "rgba(244, 63, 94, 0.55)";
         ctx.fillText("Q1: POLYCRISIS TRAP RISK (High Exposure, Low Convergence)", x.left + 10, y.top + 16);
@@ -940,24 +1401,14 @@ window.DashboardCharts = (function () {
             max: 100,
             grid: { color: c.grid },
             ticks: { color: c.text },
-            title: {
-              display: true,
-              text: "Convergence, DOI & Green Transition Score (0–100) →",
-              color: c.emerald,
-              font: { size: 12, weight: "700" }
-            }
+            title: { display: true, text: "Convergence, DOI & Green Transition Score (0–100) →", color: c.emerald, font: { size: 12, weight: "700" } }
           },
           y: {
             min: 10,
             max: 100,
             grid: { color: c.grid },
             ticks: { color: c.text },
-            title: {
-              display: true,
-              text: "↑ Polycrisis Human Exposure Index (0–100)",
-              color: c.crimson,
-              font: { size: 12, weight: "700" }
-            }
+            title: { display: true, text: "↑ Polycrisis Human Exposure Index (0–100)", color: c.crimson, font: { size: 12, weight: "700" } }
           }
         },
         plugins: {
@@ -972,7 +1423,7 @@ window.DashboardCharts = (function () {
             callbacks: {
               title(items) {
                 const ct = items[0].raw.country;
-                return `${ct.name} (${ct.region}) — ${ct.archetype}`;
+                return `${ct.flag} ${ct.name} (${ct.region}) — ${ct.archetype}`;
               },
               label(item) {
                 const ct = item.raw.country;
@@ -991,9 +1442,6 @@ window.DashboardCharts = (function () {
     });
   }
 
-  // ==========================================================================
-  // 11. COUNTRY DRILL-DOWN MODAL RADAR CHART
-  // ==========================================================================
   function renderCountryModalChart(country) {
     const ctx = document.getElementById("countryModalRadar");
     if (!ctx) return;
@@ -1032,15 +1480,7 @@ window.DashboardCharts = (function () {
             borderColor: c.cyan,
             backgroundColor: "rgba(56, 189, 248, 0.22)",
             borderWidth: 2.5,
-            pointBackgroundColor: [
-              c.emerald,
-              c.cyan,
-              c.emerald,
-              c.crimson,
-              c.orange,
-              c.amber,
-              c.crimson
-            ],
+            pointBackgroundColor: [c.emerald, c.cyan, c.emerald, c.crimson, c.orange, c.amber, c.crimson],
             pointRadius: 4
           }
         ]
@@ -1058,16 +1498,11 @@ window.DashboardCharts = (function () {
             suggestedMax: 100
           }
         },
-        plugins: {
-          legend: { display: false }
-        }
+        plugins: { legend: { display: false } }
       }
     });
   }
 
-  // ==========================================================================
-  // 12. 2025-2050 SCENARIO SIMULATOR PROJECTION CHART
-  // ==========================================================================
   function initScenarioChart() {
     const ctx = document.getElementById("scenarioProjectionChart");
     if (!ctx) return;
@@ -1075,12 +1510,7 @@ window.DashboardCharts = (function () {
     const years = window.DASHBOARD_DATA.scenarios.projectionYears;
 
     const opts = baseChartOptions(c, false);
-    opts.scales.y.title = {
-      display: true,
-      text: "Projected Global Index (2000 = 100)",
-      color: c.text,
-      font: { size: 11 }
-    };
+    opts.scales.y.title = { display: true, text: "Projected Global Index (2000 = 100)", color: c.text, font: { size: 11 } };
 
     charts.scenario = new Chart(ctx, {
       type: "line",
@@ -1112,12 +1542,8 @@ window.DashboardCharts = (function () {
   }
 
   function updateScenarioProjections(sliders) {
-    // Compute 2025-2050 trajectories from the 4 interactive sliders (0-100)
     const { doiVelocity, convergencePolicy, climateAction, geopolitics } = sliders;
-
-    // Positive driver composite (0 to 1)
     const posDriver = (doiVelocity * 0.35 + convergencePolicy * 0.3 + climateAction * 0.2 + geopolitics * 0.15) / 100;
-    // Crisis mitigation composite (0 to 1)
     const mitigationDriver = (climateAction * 0.4 + geopolitics * 0.3 + convergencePolicy * 0.2 + doiVelocity * 0.1) / 100;
 
     const baseConv2025 = 328.4;
@@ -1127,7 +1553,6 @@ window.DashboardCharts = (function () {
     const polySeries = [basePoly2025];
 
     for (let step = 1; step <= 5; step++) {
-      // Each step is 5 years (2030, 2035, 2040, 2045, 2050)
       const convGrowthPer5Yr = 18 + posDriver * 48 - (1 - mitigationDriver) * 14;
       const polyGrowthPer5Yr = 42 * (1 - mitigationDriver * 0.88) - posDriver * 8;
 
@@ -1144,7 +1569,6 @@ window.DashboardCharts = (function () {
       charts.scenario.update();
     }
 
-    // Derived 2050 KPI readouts
     const warming2050 = +(3.1 - (climateAction * 0.014 + doiVelocity * 0.004)).toFixed(2);
     const cleanShare2050 = Math.min(98, Math.round(38 + doiVelocity * 0.38 + climateAction * 0.22));
     const exposedBillions2050 = Math.max(0.6, +(3.8 - mitigationDriver * 2.5).toFixed(2));
@@ -1159,13 +1583,11 @@ window.DashboardCharts = (function () {
     };
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
   return {
     initAll() {
       initTwinForceChart();
       initRegionalBalanceChart();
+      initWorldMap();
       initConvergenceChart();
       initIncomeDistChart();
       initDoiSCurveChart();
@@ -1184,6 +1606,11 @@ window.DashboardCharts = (function () {
         }
       });
     },
+    updateWorldMapLayer,
+    updateWorldMapOverlay,
+    zoomWorldMap,
+    selectMapCountry,
+    updateNationComparatorCharts,
     updateTwinForceMode,
     updateConvergenceChartMode,
     updateWrightsLawMode,

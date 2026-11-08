@@ -12,6 +12,22 @@ An interactive macroeconomic, technological, and Earth-system dashboard examinin
    - Scrub or animate year-by-year from `2000` to `2025` to inspect the dynamic balance between the **Convergence, DOI & Green Transition Index** and the **Polycrisis Human Exposure Index**.
    - 8 reactive KPI scorecards tracking Global South GDP (PPP) share, extreme poverty (`<$2.15/day`), Solar PV module cost (`$/W`), global internet & clean capacity (`GW`), surface warming anomaly (`+°C`), lethal heat exposed population, forcibly displaced people (`UNHCR`), and active state-based armed conflicts (`UCDP`).
 
+2. **Interactive World Map (Geospatial Observatory)**
+   - D3.js + TopoJSON Natural Earth world map with pan/zoom (`+`, `-`, `Reset`), 3 overlay modes (*Choropleth + Population Bubbles*, *Polygons Only*, *Polycrisis Hotspots*), and 7 switchable geospatial layers:
+     1. *Net Resilience Balance (`Convergence Score - Polycrisis Exposure`)*
+     2. *Convergence, DOI & Green Transition Score (`0–100`)*
+     3. *Polycrisis Human Exposure Index (`0–100`)*
+     4. *GDP per Capita PPP Growth Multiple (`2000 → 2025`)*
+     5. *Clean Electricity Share (`%`)*
+     6. *Digital Leapfrog Adoption (`%`)*
+     7. *Lethal Heat Stress Exposure (`Days/Year >35°C HI`)*
+   - Includes a live **Selected Geospatial Dossier** side panel and dynamic **Top 5 / Bottom 5** rankings for whichever layer is active.
+
+3. **Overview of Nations (52-Country Strategic Atlas & Head-to-Head Comparator)**
+   - **5 Interactive Archetype Filter Cards** summarizing population, nation count, average convergence score, and average polycrisis risk across *Fast Convergers & Green Giants*, *High-Exposure Leapfroggers*, *Climate Frontline Convergers*, *Resilient Tech Leaders*, and *Polycrisis Trap Risk*.
+   - **Head-to-Head 3-Nation Comparator**: Compare any 3 nations side-by-side via overlapping 7-axis radar footprints and multi-indicator bar charts (with quick presets for *Demographic Giants*, *Global South Leapfroggers*, *East Africa vs. Fragility*, and *OECD Transitions*).
+   - **52-Nation Dossier Cards Grid**: Searchable, filterable, sortable cards featuring flag, dual progress bars, 4-metric mini-grid, tailored 1-sentence strategic synthesis note, **"Pin to 3-Nation Compare"**, and **"7-Axis Radar Profile"**.
+
 2. **Global Economic Convergence (GEC) & The Inequality Paradox**
    - Tracks the rise of Emerging Markets & Developing Economies (EMDEs) from `43.2%` (2000) to `61.1%` (2025) of World GDP (PPP) and the expansion of the global middle class to `4.50 billion` people.
    - Visualizes the transition of the global daily income distribution from a bimodal **"Twin Peaks"** world in 2000 to a unimodal converged distribution by 2025.
@@ -54,3 +70,4 @@ This project is architected as a zero-dependency, standards-compliant static web
 python3 -m http.server 8080
 # Open http://localhost:8080
 ```
+

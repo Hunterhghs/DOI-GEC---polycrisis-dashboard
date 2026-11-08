@@ -1,6 +1,7 @@
 /**
  * 21st Century Observatory — Main Interactive Controller
- * Handles Timeline Scrubber, KPI Reactivity, Country Explorer, Scenario Lab & Exports
+ * Handles Timeline Scrubber, World Map Controls, Overview of Nations Atlas,
+ * Head-to-Head Comparator, Country Matrix, Scenario Lab & Exports
  */
 
 window.DashboardApp = (function () {
@@ -9,6 +10,13 @@ window.DashboardApp = (function () {
   let currentRegionFilter = "ALL";
   let currentSortField = "convergenceScore";
   let currentSortAsc = false;
+
+  // Overview of Nations Tab State
+  let nationAtlasRegion = "ALL";
+  let nationAtlasArchetype = "ALL";
+  let nationAtlasSort = "netBalance";
+  let comparatorCodes = ["CHN", "IND", "NGA"];
+  let nextComparatorSlot = 2; // cycles 0, 1, 2 when user clicks "Pin to Compare"
 
   // ==========================================================================
   // 1. UPDATE HERO TUG-OF-WAR & 8 KPI SCORECARDS FOR SELECTED YEAR
@@ -19,7 +27,6 @@ window.DashboardApp = (function () {
     const year = D.meta.years[selectedYearIdx];
     const ts = D.timeSeries;
 
-    // Update Scrubber UI
     const yearPill = document.getElementById("selectedYearPill");
     const yearSlider = document.getElementById("globalYearSlider");
     if (yearPill) yearPill.textContent = year;
@@ -27,7 +34,6 @@ window.DashboardApp = (function () {
       yearSlider.value = selectedYearIdx;
     }
 
-    // Update Hero Tug-of-War Banner
     const convScore = ts.convergenceTransitionIndex[selectedYearIdx];
     const polyScore = ts.polycrisisExposureIndex[selectedYearIdx];
     const netDiff = +(convScore - polyScore).toFixed(1);
@@ -48,59 +54,50 @@ window.DashboardApp = (function () {
     const convBar = document.getElementById("tugBarConv");
     if (convBar) convBar.style.width = `${convSharePct}%`;
 
-    // Update 8 KPI Cards dynamically for selected year
-    // 1. EMDE Share of Global GDP (PPP)
+    // Update 8 KPI Cards
     const emdeShare = ts.emdeGdpPppShare[selectedYearIdx];
     setText("kpiEmdeShare", `${emdeShare.toFixed(1)}%`);
     setText("kpiEmdeDelta", `+${(emdeShare - ts.emdeGdpPppShare[0]).toFixed(1)} pp since 2000`);
     setBarWidth("kpiBarEmde", emdeShare);
 
-    // 2. Global Extreme Poverty Rate (<$2.15/day)
     const pov = ts.extremePovertyRate[selectedYearIdx];
     setText("kpiPoverty", `${pov.toFixed(1)}%`);
     setText("kpiPovertyDelta", `${(pov - ts.extremePovertyRate[0]).toFixed(1)} pp since 2000`);
     setBarWidth("kpiBarPoverty", Math.min(100, (pov / 35) * 100));
 
-    // 3. Solar PV Module Cost ($/W) & Clean Capacity
     const solarCost = ts.solarPvCostPerWatt[selectedYearIdx];
     const dropPct = (((solarCost - ts.solarPvCostPerWatt[0]) / ts.solarPvCostPerWatt[0]) * 100).toFixed(0);
     setText("kpiSolarCost", `$${solarCost.toFixed(2)}/W`);
     setText("kpiSolarDelta", `${dropPct}% vs 2000 ($4.88/W)`);
     setBarWidth("kpiBarSolar", Math.max(8, 100 - (solarCost / 5) * 100));
 
-    // 4. Global Internet & Digital Diffusion + Renewable GW
     const netPen = ts.internetPenetration[selectedYearIdx];
     const gw = ts.solarWindCapacityGw[selectedYearIdx];
     setText("kpiDigital", `${netPen.toFixed(1)}%`);
     setText("kpiDigitalDelta", `${gw.toLocaleString()} GW Solar+Wind`);
     setBarWidth("kpiBarDigital", netPen);
 
-    // 5. Global Warming Anomaly (°C)
     const temp = ts.tempAnomalyCelsius[selectedYearIdx];
     setText("kpiTemp", `+${temp.toFixed(2)}°C`);
     setText("kpiTempDelta", `+${(temp - ts.tempAnomalyCelsius[0]).toFixed(2)}°C vs 2000`);
     setBarWidth("kpiBarTemp", Math.min(100, (temp / 2.0) * 100));
 
-    // 6. Population Exposed to Dangerous Heat Stress (Billions)
     const heatPop = ts.heatExposedPopulationBillions[selectedYearIdx];
     setText("kpiHeatPop", `${heatPop.toFixed(2)}B`);
     setText("kpiHeatDelta", `+${(heatPop - ts.heatExposedPopulationBillions[0]).toFixed(2)}B people vs 2000`);
     setBarWidth("kpiBarHeat", Math.min(100, (heatPop / 3.2) * 100));
 
-    // 7. Forcibly Displaced People (Millions - UNHCR)
     const disp = ts.forciblyDisplacedMillions[selectedYearIdx];
     setText("kpiDisplaced", `${disp.toFixed(1)}M`);
     setText("kpiDisplacedDelta", `+${(disp - ts.forciblyDisplacedMillions[0]).toFixed(1)}M vs 2000`);
     setBarWidth("kpiBarDisplaced", Math.min(100, (disp / 140) * 100));
 
-    // 8. State-Based Armed Conflicts & Acute Food Insecurity
     const conf = ts.activeStateConflicts[selectedYearIdx];
     const food = ts.acuteFoodInsecurityMillions[selectedYearIdx];
     setText("kpiConflicts", `${conf} Wars`);
     setText("kpiConflictsDelta", `${food}M in Acute Food Crisis`);
     setBarWidth("kpiBarConflicts", Math.min(100, (conf / 70) * 100));
 
-    // Update vertical year line on charts
     if (window.DashboardCharts) {
       window.DashboardCharts.setYearIndex(selectedYearIdx);
     }
@@ -117,7 +114,240 @@ window.DashboardApp = (function () {
   }
 
   // ==========================================================================
-  // 2. RENDER DIFFUSION COMPRESSION LIST (1840s - 2025)
+  // 2. RENDER OVERVIEW OF NATIONS TAB (ARCHETYPES, COMPARATOR & CARDS ATLAS)
+  // ==========================================================================
+  function getArchetypeClass(arch) {
+    if (arch.includes("Green Giant")) return "arch-green";
+    if (arch.includes("Leapfrogger")) return "arch-leap";
+    if (arch.includes("Frontline")) return "arch-front";
+    if (arch.includes("Trap")) return "arch-trap";
+    return "arch-res";
+  }
+
+  function renderArchetypeSummaryCards() {
+    const container = document.getElementById("archetypeOverviewGrid");
+    if (!container) return;
+
+    const archetypes = [
+      { key: "Fast Converger / Green Giant", label: "Fast Convergers & Green Giants", pill: "arch-green" },
+      { key: "High-Exposure Leapfrogger", label: "High-Exposure Leapfroggers", pill: "arch-leap" },
+      { key: "Climate Frontline Converger", label: "Climate Frontline Convergers", pill: "arch-front" },
+      { key: "Resilient Tech Leader", label: "Resilient Tech Leaders", pill: "arch-res" },
+      { key: "Polycrisis Trap Risk", label: "Polycrisis Trap Risk", pill: "arch-trap" }
+    ];
+
+    const allCountries = window.DASHBOARD_DATA.countries;
+
+    container.innerHTML = archetypes
+      .map((a) => {
+        const group = allCountries.filter((c) => c.archetype === a.key);
+        const totalPop = group.reduce((s, c) => s + c.popM, 0);
+        const avgConv = Math.round(group.reduce((s, c) => s + c.convergenceScore, 0) / Math.max(1, group.length));
+        const avgPoly = Math.round(group.reduce((s, c) => s + c.polycrisisExposure, 0) / Math.max(1, group.length));
+        const isActive = nationAtlasArchetype === a.key;
+
+        return `
+          <div class="archetype-summary-card ${isActive ? "active" : ""}" data-arch-filter="${a.key}">
+            <div class="arch-card-top">
+              <span class="archetype-pill ${a.pill}">${group.length} Nations</span>
+              <span class="arch-card-count">${(totalPop / 1000).toFixed(2)}B Pop</span>
+            </div>
+            <div class="arch-card-title">${a.label}</div>
+            <div class="arch-card-stats">
+              <span style="color:var(--conv-emerald);">Avg Conv: ${avgConv}</span>
+              <span style="color:var(--poly-crimson);">Avg Risk: ${avgPoly}</span>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    container.querySelectorAll(".archetype-summary-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const clickedArch = card.getAttribute("data-arch-filter");
+        nationAtlasArchetype = nationAtlasArchetype === clickedArch ? "ALL" : clickedArch;
+        renderArchetypeSummaryCards();
+        renderNationsDossierCards();
+      });
+    });
+  }
+
+  function initNationComparator() {
+    const selects = ["compSelect1", "compSelect2", "compSelect3"].map((id) => document.getElementById(id));
+    if (!selects[0]) return;
+
+    const sortedCountries = [...window.DASHBOARD_DATA.countries].sort((a, b) => a.name.localeCompare(b.name));
+    const optionsHtml = sortedCountries
+      .map((c) => `<option value="${c.code}">${c.flag} ${c.name} (${c.region})</option>`)
+      .join("");
+
+    selects.forEach((sel, idx) => {
+      if (!sel) return;
+      sel.innerHTML = optionsHtml;
+      sel.value = comparatorCodes[idx];
+      sel.addEventListener("change", () => {
+        comparatorCodes[idx] = sel.value;
+        refreshComparatorView();
+      });
+    });
+
+    // Preset comparison buttons
+    document.querySelectorAll("[data-comp-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("[data-comp-preset]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const codes = btn.getAttribute("data-comp-preset").split(",");
+        comparatorCodes = codes;
+        selects.forEach((sel, idx) => {
+          if (sel && codes[idx]) sel.value = codes[idx];
+        });
+        refreshComparatorView();
+      });
+    });
+
+    refreshComparatorView();
+  }
+
+  function refreshComparatorView() {
+    if (window.DashboardCharts && window.DashboardCharts.updateNationComparatorCharts) {
+      window.DashboardCharts.updateNationComparatorCharts(comparatorCodes);
+    }
+  }
+
+  function pinNationToComparator(code) {
+    if (!comparatorCodes.includes(code)) {
+      comparatorCodes[nextComparatorSlot] = code;
+      nextComparatorSlot = (nextComparatorSlot + 1) % 3;
+      ["compSelect1", "compSelect2", "compSelect3"].forEach((id, idx) => {
+        const el = document.getElementById(id);
+        if (el) el.value = comparatorCodes[idx];
+      });
+      refreshComparatorView();
+    }
+    const compEl = document.getElementById("nationComparatorBox");
+    if (compEl) compEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function renderNationsDossierCards() {
+    const grid = document.getElementById("nationsCardsGrid");
+    if (!grid) return;
+
+    const searchVal = (document.getElementById("nationsSearchInput")?.value || "").toLowerCase().trim();
+
+    let list = window.DASHBOARD_DATA.countries.filter((c) => {
+      const matchReg = nationAtlasRegion === "ALL" || c.region === nationAtlasRegion;
+      const matchArch = nationAtlasArchetype === "ALL" || c.archetype === nationAtlasArchetype;
+      const matchSearch =
+        !searchVal ||
+        c.name.toLowerCase().includes(searchVal) ||
+        c.code.toLowerCase().includes(searchVal) ||
+        c.archetype.toLowerCase().includes(searchVal) ||
+        c.summary.toLowerCase().includes(searchVal);
+      return matchReg && matchArch && matchSearch;
+    });
+
+    list.sort((a, b) => {
+      if (nationAtlasSort === "netBalance") {
+        return b.convergenceScore - b.polycrisisExposure - (a.convergenceScore - a.polycrisisExposure);
+      }
+      if (nationAtlasSort === "convergenceScore") return b.convergenceScore - a.convergenceScore;
+      if (nationAtlasSort === "polycrisisExposure") return b.polycrisisExposure - a.polycrisisExposure;
+      if (nationAtlasSort === "gdpMultiple") return b.gdpPpp2025 / b.gdpPpp2000 - a.gdpPpp2025 / a.gdpPpp2000;
+      if (nationAtlasSort === "cleanElecShare2025") return b.cleanElecShare2025 - a.cleanElecShare2025;
+      if (nationAtlasSort === "popM") return b.popM - a.popM;
+      return a.name.localeCompare(b.name);
+    });
+
+    const countBadge = document.getElementById("nationsShownCount");
+    if (countBadge) {
+      countBadge.textContent = `Showing ${list.length} of ${window.DASHBOARD_DATA.countries.length} Nations`;
+    }
+
+    grid.innerHTML = list
+      .map((c) => {
+        const net = c.convergenceScore - c.polycrisisExposure;
+        const netColor = net >= 10 ? "var(--conv-emerald)" : net >= -10 ? "var(--conv-cyan)" : "var(--poly-crimson)";
+        const gdpMult = (c.gdpPpp2025 / c.gdpPpp2000).toFixed(1);
+
+        return `
+          <article class="nation-dossier-card">
+            <div>
+              <div class="nation-card-header">
+                <div class="nation-title-cluster">
+                  <span class="nation-flag">${c.flag}</span>
+                  <div class="nation-name-row">
+                    <h4>${c.name} <span style="font-family:var(--font-mono); font-size:0.72rem; color:var(--text-muted);">${c.code}</span></h4>
+                    <div class="nation-meta-sub">${c.region} • Pop: ${c.popM}M</div>
+                  </div>
+                </div>
+                <span class="archetype-pill ${getArchetypeClass(c.archetype)}">${c.archetype}</span>
+              </div>
+
+              <div class="nation-dual-bars" style="margin-top:0.75rem;">
+                <div class="nation-bar-row">
+                  <span class="nation-bar-label">Convergence &amp; DOI</span>
+                  <div class="nation-bar-track">
+                    <div class="nation-bar-fill" style="width:${c.convergenceScore}%; background:var(--conv-emerald);"></div>
+                  </div>
+                  <span class="nation-bar-val" style="color:var(--conv-emerald);">${c.convergenceScore}</span>
+                </div>
+                <div class="nation-bar-row">
+                  <span class="nation-bar-label">Polycrisis Exposure</span>
+                  <div class="nation-bar-track">
+                    <div class="nation-bar-fill" style="width:${c.polycrisisExposure}%; background:var(--poly-crimson);"></div>
+                  </div>
+                  <span class="nation-bar-val" style="color:var(--poly-crimson);">${c.polycrisisExposure}</span>
+                </div>
+              </div>
+
+              <div class="nation-metrics-4grid" style="margin-top:0.65rem;">
+                <div class="nation-metric-cell">
+                  <span>GDP/cap PPP (2000→2025)</span>
+                  <strong>$${c.gdpPpp2025.toLocaleString()} <em style="color:var(--conv-emerald); font-style:normal; font-size:0.72rem;">(${gdpMult}x)</em></strong>
+                </div>
+                <div class="nation-metric-cell">
+                  <span>Clean Electricity / Digital</span>
+                  <strong>${c.cleanElecShare2025}% <span style="color:var(--text-muted);">|</span> ${c.digitalAdoption2025}%</strong>
+                </div>
+                <div class="nation-metric-cell">
+                  <span>Dangerous Heat Stress</span>
+                  <strong style="color:${c.heatDays2025 >= 80 ? "var(--poly-orange)" : "var(--text-primary)"};">${c.heatDays2025} days/yr</strong>
+                </div>
+                <div class="nation-metric-cell">
+                  <span>Net Resilience Balance</span>
+                  <strong style="color:${netColor};">${net >= 0 ? "+" : ""}${net} pts</strong>
+                </div>
+              </div>
+
+              <p class="nation-summary-text" style="margin-top:0.7rem;">
+                ${c.summary}
+              </p>
+            </div>
+
+            <div class="nation-card-actions">
+              <button class="chip-btn" data-pin-compare="${c.code}" type="button">
+                ⚖ Pin to 3-Nation Compare
+              </button>
+              <button class="chip-btn active" data-open-modal="${c.code}" type="button">
+                ◎ 7-Axis Radar Profile
+              </button>
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+
+    grid.querySelectorAll("[data-pin-compare]").forEach((btn) => {
+      btn.addEventListener("click", () => pinNationToComparator(btn.getAttribute("data-pin-compare")));
+    });
+
+    grid.querySelectorAll("[data-open-modal]").forEach((btn) => {
+      btn.addEventListener("click", () => openCountryModal(btn.getAttribute("data-open-modal")));
+    });
+  }
+
+  // ==========================================================================
+  // 3. RENDER DIFFUSION COMPRESSION LIST (1840s - 2025)
   // ==========================================================================
   function renderCompressionList() {
     const container = document.getElementById("compressionListContainer");
@@ -161,16 +391,8 @@ window.DashboardApp = (function () {
   }
 
   // ==========================================================================
-  // 3. COUNTRY MATRIX TABLE & DRILL-DOWN MODAL
+  // 4. COUNTRY MATRIX TABLE & DRILL-DOWN MODAL
   // ==========================================================================
-  function getArchetypeClass(arch) {
-    if (arch.includes("Green Giant")) return "arch-green";
-    if (arch.includes("Leapfrogger")) return "arch-leap";
-    if (arch.includes("Frontline")) return "arch-front";
-    if (arch.includes("Trap")) return "arch-trap";
-    return "arch-res";
-  }
-
   function renderCountryTable() {
     const tbody = document.getElementById("countryTableBody");
     if (!tbody) return;
@@ -204,7 +426,7 @@ window.DashboardApp = (function () {
         return `
           <tr data-code="${c.code}">
             <td>
-              <strong>${c.name}</strong>
+              <span>${c.flag}</span> <strong>${c.name}</strong>
               <span style="font-family:var(--font-mono); font-size:0.68rem; color:var(--text-muted); margin-left:4px;">${c.code}</span>
             </td>
             <td style="color:var(--text-secondary);">${c.region}</td>
@@ -241,11 +463,8 @@ window.DashboardApp = (function () {
       })
       .join("");
 
-    // Row click opens modal
     tbody.querySelectorAll("tr").forEach((row) => {
-      row.addEventListener("click", () => {
-        openCountryModal(row.getAttribute("data-code"));
-      });
+      row.addEventListener("click", () => openCountryModal(row.getAttribute("data-code")));
     });
   }
 
@@ -259,7 +478,7 @@ window.DashboardApp = (function () {
     const gdpGrowthPct = (((country.gdpPpp2025 - country.gdpPpp2000) / country.gdpPpp2000) * 100).toFixed(0);
     const netBalance = country.convergenceScore - country.polycrisisExposure;
 
-    setText("modalCountryTitle", `${country.name} (${country.code})`);
+    setText("modalCountryTitle", `${country.flag} ${country.name} (${country.code})`);
     setText("modalCountrySubtitle", `${country.region} • Population: ${country.popM}M • Archetype: ${country.archetype}`);
     setText("modalConvScore", `${country.convergenceScore}/100`);
     setText("modalPolyScore", `${country.polycrisisExposure}/100`);
@@ -271,6 +490,7 @@ window.DashboardApp = (function () {
     setText("modalWaterStress", `${country.waterStress}/100`);
     setText("modalDebt", `${country.debtVulnerability}/100`);
     setText("modalConflict", `${country.conflictRisk}/100`);
+    setText("modalCountrySummary", country.summary);
 
     modal.classList.add("open");
     if (window.DashboardCharts) {
@@ -279,11 +499,10 @@ window.DashboardApp = (function () {
   }
 
   // ==========================================================================
-  // 4. 2025–2050 SCENARIO SIMULATOR CONTROLS
+  // 5. 2025–2050 SCENARIO SIMULATOR CONTROLS
   // ==========================================================================
   function initScenarioSimulator() {
     const sliderIds = ["simSliderDoi", "simSliderConv", "simSliderClimate", "simSliderGeo"];
-    const badgeIds = ["simValDoi", "simValConv", "simValClimate", "simValGeo"];
 
     function readSlidersAndUpdate() {
       const sliders = {
@@ -319,7 +538,6 @@ window.DashboardApp = (function () {
       }
     });
 
-    // Preset scenario buttons
     document.querySelectorAll(".preset-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const key = btn.getAttribute("data-preset");
@@ -343,7 +561,7 @@ window.DashboardApp = (function () {
   }
 
   // ==========================================================================
-  // 5. DATA EXPORT (CSV / JSON)
+  // 6. DATA EXPORT (CSV)
   // ==========================================================================
   function exportCountriesCsv() {
     const countries = window.DASHBOARD_DATA.countries;
@@ -352,30 +570,29 @@ window.DashboardApp = (function () {
       "Convergence_DOI_Score", "Polycrisis_Exposure_Index",
       "GDP_PPP_2000", "GDP_PPP_2025", "Clean_Electricity_2025_Pct",
       "Digital_Adoption_2025_Pct", "Lethal_Heat_Days_2025",
-      "Water_Stress_Score", "Debt_Vulnerability_Score", "Conflict_Risk_Score"
+      "Water_Stress_Score", "Debt_Vulnerability_Score", "Conflict_Risk_Score", "Synthesis_Summary"
     ];
 
     const rows = countries.map((c) => [
       c.code, `"${c.name}"`, `"${c.region}"`, c.popM, `"${c.archetype}"`,
       c.convergenceScore, c.polycrisisExposure, c.gdpPpp2000, c.gdpPpp2025,
       c.cleanElecShare2025, c.digitalAdoption2025, c.heatDays2025,
-      c.waterStress, c.debtVulnerability, c.conflictRisk
+      c.waterStress, c.debtVulnerability, c.conflictRisk, `"${c.summary.replace(/"/g, '""')}"`
     ]);
 
     const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csvContent));
-    link.setAttribute("download", "21st_century_convergence_vs_polycrisis_dataset.csv");
+    link.setAttribute("download", "21st_century_nations_convergence_vs_polycrisis.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   }
 
   // ==========================================================================
-  // 6. INITIALIZE EVENT LISTENERS
+  // 7. INITIALIZE EVENT LISTENERS
   // ==========================================================================
   function bindEvents() {
-    // Global Year Scrubber
     const slider = document.getElementById("globalYearSlider");
     if (slider) {
       slider.addEventListener("input", (e) => {
@@ -384,7 +601,6 @@ window.DashboardApp = (function () {
       });
     }
 
-    // Play / Pause Timeline Button
     const playBtn = document.getElementById("playTimelineBtn");
     if (playBtn) {
       playBtn.addEventListener("click", () => {
@@ -435,7 +651,56 @@ window.DashboardApp = (function () {
       });
     });
 
-    // Chart Mode Toggle Chips
+    // World Map Layer Buttons
+    document.querySelectorAll("[data-map-layer]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("[data-map-layer]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        window.DashboardCharts.updateWorldMapLayer(btn.getAttribute("data-map-layer"));
+      });
+    });
+
+    // World Map Overlay Mode Buttons
+    document.querySelectorAll("[data-map-overlay]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("[data-map-overlay]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        window.DashboardCharts.updateWorldMapOverlay(btn.getAttribute("data-map-overlay"));
+      });
+    });
+
+    // World Map Zoom Controls
+    const zIn = document.getElementById("mapZoomInBtn");
+    const zOut = document.getElementById("mapZoomOutBtn");
+    const zReset = document.getElementById("mapZoomResetBtn");
+    if (zIn) zIn.addEventListener("click", () => window.DashboardCharts.zoomWorldMap(1.4));
+    if (zOut) zOut.addEventListener("click", () => window.DashboardCharts.zoomWorldMap(0.7));
+    if (zReset) zReset.addEventListener("click", () => window.DashboardCharts.zoomWorldMap("reset"));
+
+    // Overview of Nations Filters & Search
+    document.querySelectorAll("[data-nation-region]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("[data-nation-region]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        nationAtlasRegion = btn.getAttribute("data-nation-region");
+        renderNationsDossierCards();
+      });
+    });
+
+    const nationsSearch = document.getElementById("nationsSearchInput");
+    if (nationsSearch) {
+      nationsSearch.addEventListener("input", renderNationsDossierCards);
+    }
+
+    const nationsSort = document.getElementById("nationsSortSelect");
+    if (nationsSort) {
+      nationsSort.addEventListener("change", (e) => {
+        nationAtlasSort = e.target.value;
+        renderNationsDossierCards();
+      });
+    }
+
+    // Existing Chart Mode Toggle Chips
     document.querySelectorAll("[data-twin-mode]").forEach((btn) => {
       btn.addEventListener("click", () => {
         document.querySelectorAll("[data-twin-mode]").forEach((b) => b.classList.remove("active"));
@@ -460,7 +725,7 @@ window.DashboardApp = (function () {
       });
     });
 
-    // Country Region Filter Pills
+    // Country Matrix Region Filter Pills
     document.querySelectorAll("[data-region-filter]").forEach((btn) => {
       btn.addEventListener("click", () => {
         document.querySelectorAll("[data-region-filter]").forEach((b) => b.classList.remove("active"));
@@ -471,13 +736,11 @@ window.DashboardApp = (function () {
       });
     });
 
-    // Country Search Input
     const searchInput = document.getElementById("countrySearchInput");
     if (searchInput) {
       searchInput.addEventListener("input", () => renderCountryTable());
     }
 
-    // Country Table Sorting
     document.querySelectorAll("th[data-sort]").forEach((th) => {
       th.addEventListener("click", () => {
         const field = th.getAttribute("data-sort");
@@ -500,23 +763,21 @@ window.DashboardApp = (function () {
         root.setAttribute("data-theme", isLight ? "dark" : "light");
         themeBtn.textContent = isLight ? "☀ Light Mode" : "☾ Dark Mode";
         window.DashboardCharts.refreshTheme();
+        refreshComparatorView();
       });
     }
 
-    // Export CSV
     const exportBtn = document.getElementById("exportCsvBtn");
     if (exportBtn) {
       exportBtn.addEventListener("click", exportCountriesCsv);
     }
 
-    // Methodology Modal
     const methBtn = document.getElementById("methodologyBtn");
     const methModal = document.getElementById("methodologyModalBackdrop");
     if (methBtn && methModal) {
       methBtn.addEventListener("click", () => methModal.classList.add("open"));
     }
 
-    // Close Modals
     document.querySelectorAll(".modal-close-btn, .modal-backdrop").forEach((el) => {
       el.addEventListener("click", (e) => {
         if (e.target === el) {
@@ -529,6 +790,9 @@ window.DashboardApp = (function () {
   return {
     init() {
       window.DashboardCharts.initAll();
+      renderArchetypeSummaryCards();
+      initNationComparator();
+      renderNationsDossierCards();
       renderCompressionList();
       renderCountryTable();
       initScenarioSimulator();
